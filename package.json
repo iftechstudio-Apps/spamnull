@@ -1,0 +1,39 @@
+{
+  "name": "spamnull",
+  "version": "1.0.0",
+  "description": "High-performance, self-hosted disposable email and spam domain detection for Node.js.",
+  "main": "index.js",
+  "keywords": [
+    "spamnull",
+    "anti-spam",
+    "disposable-email",
+    "email-validation",
+    "security",
+    "temp-mail",
+    "temporary-email",
+    "spam-detection"
+  ],
+  "author": "SpamNull.com",
+  "license": "MIT",
+  "homepage": "https://spamnull.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iftechstudio-Apps/spamnull.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iftechstudio-Apps/spamnull/issues"
+  },
+  "files": [
+    "index.js",
+    "spam_domains.json",
+    "whitelist_domains.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "scripts": {
+    "test": "node -e \"const spamnull = require('./'); console.assert(spamnull('test@mailinator.com') === true); console.assert(spamnull('test@gmail.com') === false); console.log('All tests passed.')\""
+  }
+}
