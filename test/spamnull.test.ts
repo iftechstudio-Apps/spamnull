@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import isSpamDefault, {
   check,
   checkDomain,
@@ -13,6 +13,7 @@ import isSpamDefault, {
   stats,
   SpamNull,
 } from "../src/index";
+import { resetRemoteCache } from "../src/remote-sync";
 
 afterEach(() => resetOptions());
 
@@ -211,5 +212,101 @@ describe("dataset integrity", () => {
     const started = performance.now();
     for (let i = 0; i < 50_000; i++) isSpam(`user${i}@mailinator.com`);
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe("syncRemote", () => {
+  beforeEach(() => {
+    resetRemoteCache();
+    vi.stubGlobal("fetch", vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("merges a valid remote payload and takes precedence over the built-in list only", async () => {
+    const domains = Array.from({ length: 60 }, (_, i) => `remote-temp-${i}.example`);
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify(domains), { status: 200 }),
+    );
+
+    const detector = createDetector();
+    const result = await detector.syncRemote({ cachePath: false });
+
+    expect(result.fetched).toBe(true);
+    expect(result.fallback).toBe(false);
+    expect(detector.isSpam("a@remote-temp-0.example")).toBe(true);
+    expect(detector.stats().remoteDomains).toBe(60);
+  });
+
+  it("falls back cleanly on a non-array payload instead of throwing", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ not: "an array" }), { status: 200 }),
+    );
+
+    const detector = createDetector();
+    const result = await detector.syncRemote({ cachePath: false });
+
+    expect(result.fallback).toBe(true);
+    expect(result.reason).toMatch(/not a JSON array/);
+    expect(detector.stats().remoteDomains).toBe(0);
+    // built-in list still fully intact
+    expect(detector.isSpam("a@mailinator.com")).toBe(true);
+  });
+
+  it("falls back cleanly when the payload is suspiciously small", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify(["only-one-domain.com"]), { status: 200 }),
+    );
+
+    const detector = createDetector();
+    const result = await detector.syncRemote({ cachePath: false, minDomains: 50 });
+
+    expect(result.fallback).toBe(true);
+    expect(result.reason).toMatch(/min 50/);
+  });
+
+  it("falls back cleanly on a network error", async () => {
+    vi.mocked(fetch).mockRejectedValue(new Error("network down"));
+
+    const detector = createDetector();
+    const result = await detector.syncRemote({ cachePath: false });
+
+    expect(result.fallback).toBe(true);
+    expect(result.reason).toMatch(/network down/);
+  });
+
+  it("rejects non-https URLs without ever calling fetch", async () => {
+    const detector = createDetector();
+    const result = await detector.syncRemote({ url: "http://insecure.example/domains.json" });
+
+    expect(result.fallback).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("respects allowRemote: false as a hard policy gate", async () => {
+    const detector = createDetector({ allowRemote: false });
+    const result = await detector.syncRemote({ cachePath: false });
+
+    expect(result.fallback).toBe(true);
+    expect(result.reason).toMatch(/allowRemote/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("serves fresh in-memory cache without a second network call", async () => {
+    const domains = Array.from({ length: 60 }, (_, i) => `cached-${i}.example`);
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify(domains), { status: 200 }),
+    );
+
+    const detector = createDetector();
+    await detector.syncRemote({ cachePath: false, url: "https://cdn.example/domains.json" });
+    const second = await detector.syncRemote({
+      cachePath: false,
+      url: "https://cdn.example/domains.json",
+    });
+
+    expect(second.cached).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

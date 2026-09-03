@@ -11,10 +11,12 @@
 import { SpamNull, createDetector } from "./detector";
 import type { DetectorOptions, DetectorStats, SpamCheckResult } from "./detector";
 import { extractDomain, normalizeDomain } from "./normalize";
+import type { RemoteSyncOptions, RemoteSyncResult } from "./remote-sync";
 
 export { SpamNull, createDetector };
 export { extractDomain, normalizeDomain };
 export type { DetectorOptions, DetectorStats, SpamCheckResult };
+export type { RemoteSyncOptions, RemoteSyncResult };
 
 /** Shared process-wide detector used by the top-level helpers. */
 export const defaultDetector = new SpamNull();
@@ -60,6 +62,16 @@ export function resetOptions(): void {
 /** List sizes for the shared detector. */
 export function stats(): DetectorStats {
   return defaultDetector.stats();
+}
+
+/**
+ * Explicitly refresh the shared detector's domain list from the network.
+ * Opt-in only — this function is never called automatically by the
+ * package. See `SpamNull.prototype.syncRemote` for the full contract
+ * (fail-safe fallback, TTL caching, strict validation).
+ */
+export function syncRemote(options: RemoteSyncOptions = {}): Promise<RemoteSyncResult> {
+  return defaultDetector.syncRemote(options);
 }
 
 export default isSpam;

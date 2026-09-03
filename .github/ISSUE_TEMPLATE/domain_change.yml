@@ -1,0 +1,19 @@
+name: Domain-list correction
+description: Request a domain addition or removal
+labels: [data]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include personal data. Domain classifications are reviewed and are not guaranteed."
+  - type: input
+    id: domain
+    attributes: { label: Domain name, placeholder: example.com }
+    validations: { required: true }
+  - type: dropdown
+    id: change
+    attributes: { label: Requested change, options: [Add to blocklist, Remove from blocklist] }
+    validations: { required: true }
+  - type: textarea
+    id: evidence
+    attributes: { label: Evidence and source }
+    validations: { required: true }

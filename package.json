@@ -48,7 +48,11 @@
   },
   "packageManager": "npm@10.9.2",
   "scripts": {
-    "build:data": "node scripts/build-data.mjs",
+    "validate:data": "node scripts/validate-data.mjs",
+    "sync:upstream": "node scripts/sync-upstream.mjs",
+    "add-domain": "node scripts/add-domain.mjs",
+    "remove-domain": "node scripts/remove-domain.mjs",
+    "build:data": "npm run validate:data && node scripts/build-data.mjs",
     "build": "npm run build:data && tsup && node scripts/postbuild.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -56,7 +60,7 @@
     "coverage": "vitest run --coverage",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run validate:data && npm run build && npm test"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

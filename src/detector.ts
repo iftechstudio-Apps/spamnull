@@ -1,5 +1,6 @@
 import { SPAM_DOMAINS, WHITELIST_DOMAINS } from "./generated/domains";
 import { extractDomain, normalizeDomain, parentDomains } from "./normalize";
+import { syncRemote, type RemoteSyncOptions, type RemoteSyncResult } from "./remote-sync";
 
 export interface DetectorOptions {
   /**
@@ -21,6 +22,15 @@ export interface DetectorOptions {
    * @default true
    */
   useBuiltinLists?: boolean;
+  /**
+   * Policy gate for `detector.syncRemote()`. This does NOT trigger any
+   * network activity by itself — nothing in this package ever fetches
+   * automatically. It only decides whether an explicit `syncRemote()` call
+   * is permitted to proceed, so organizations can hard-disable remote
+   * fetching via config/env without touching call sites.
+   * @default true
+   */
+  allowRemote?: boolean;
 }
 
 export interface DetectorStats {
@@ -28,7 +38,9 @@ export interface DetectorStats {
   whitelistDomains: number;
   customBlacklist: number;
   customWhitelist: number;
+  remoteDomains: number;
   matchSubdomains: boolean;
+  allowRemote: boolean;
 }
 
 export interface SpamCheckResult {
@@ -38,7 +50,13 @@ export interface SpamCheckResult {
   domain: string | null;
   /** Why the verdict was reached. */
   reason:
-    "invalid" | "whitelist" | "custom-whitelist" | "blacklist" | "custom-blacklist" | "not-listed";
+    | "invalid"
+    | "whitelist"
+    | "custom-whitelist"
+    | "blacklist"
+    | "custom-blacklist"
+    | "remote-blacklist"
+    | "not-listed";
   /** The listed domain that matched, when the match came from a parent domain. */
   matched?: string;
 }
@@ -64,13 +82,16 @@ export class SpamNull {
   readonly #whitelist: Set<string>;
   readonly #customSpam = new Set<string>();
   readonly #customWhitelist = new Set<string>();
+  readonly #remoteSpam = new Set<string>();
   #matchSubdomains: boolean;
+  #allowRemote: boolean;
 
   constructor(options: DetectorOptions = {}) {
     const useBuiltin = options.useBuiltinLists !== false;
     this.#spam = useBuiltin ? new Set(SPAM_DOMAINS) : new Set<string>();
     this.#whitelist = useBuiltin ? new Set(WHITELIST_DOMAINS) : new Set<string>();
     this.#matchSubdomains = options.matchSubdomains === true;
+    this.#allowRemote = options.allowRemote !== false;
     this.configure(options);
   }
 
@@ -85,6 +106,9 @@ export class SpamNull {
     if (options.matchSubdomains !== undefined) {
       this.#matchSubdomains = options.matchSubdomains === true;
     }
+    if (options.allowRemote !== undefined) {
+      this.#allowRemote = options.allowRemote === true;
+    }
     for (const domain of toSet(options.whitelist)) this.#customWhitelist.add(domain);
     for (const domain of toSet(options.customBlacklist)) this.#customSpam.add(domain);
     return this;
@@ -94,7 +118,39 @@ export class SpamNull {
   reset(): this {
     this.#customSpam.clear();
     this.#customWhitelist.clear();
+    this.#remoteSpam.clear();
     return this;
+  }
+
+  /**
+   * Explicitly pull the latest disposable-domain list from the network and
+   * merge it into this detector. Nothing in this package ever calls this
+   * for you — no timers, no auto-run on construction or import. Fails safe:
+   * on any network/validation error the detector's existing lists (built-in
+   * + custom) are left completely untouched and the result reports why.
+   *
+   * Merged domains are additive only, never a replacement — they sit
+   * alongside the built-in list with the same precedence as the built-in
+   * blacklist, and both whitelists still always win over them.
+   */
+  async syncRemote(options: RemoteSyncOptions = {}): Promise<RemoteSyncResult> {
+    if (!this.#allowRemote) {
+      return {
+        fetched: false,
+        cached: false,
+        fallback: true,
+        reason: "remote sync disabled via allowRemote: false",
+        domains: [],
+      };
+    }
+    const result = await syncRemote(options);
+    if (!result.fallback) {
+      for (const raw of result.domains) {
+        const domain = normalizeDomain(raw);
+        if (domain) this.#remoteSpam.add(domain);
+      }
+    }
+    return result;
   }
 
   /** Detailed verdict for an email address. */
@@ -134,13 +190,17 @@ export class SpamNull {
       whitelistDomains: this.#whitelist.size,
       customBlacklist: this.#customSpam.size,
       customWhitelist: this.#customWhitelist.size,
+      remoteDomains: this.#remoteSpam.size,
       matchSubdomains: this.#matchSubdomains,
+      allowRemote: this.#allowRemote,
     };
   }
 
   #evaluate(domain: string | null): SpamCheckResult {
     if (!domain) return { spam: false, domain: null, reason: "invalid" };
 
+    // Both whitelists are checked first and always win — a remote sync can
+    // never cause a previously-trusted domain to start being rejected.
     const customWhite = this.#lookup(domain, this.#customWhitelist);
     if (customWhite) {
       return { spam: false, domain, reason: "custom-whitelist", matched: customWhite };
@@ -152,6 +212,11 @@ export class SpamNull {
     const customBlack = this.#lookup(domain, this.#customSpam);
     if (customBlack) {
       return { spam: true, domain, reason: "custom-blacklist", matched: customBlack };
+    }
+
+    const remoteBlack = this.#lookup(domain, this.#remoteSpam);
+    if (remoteBlack) {
+      return { spam: true, domain, reason: "remote-blacklist", matched: remoteBlack };
     }
 
     const black = this.#lookup(domain, this.#spam);
